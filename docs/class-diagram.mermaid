@@ -1,0 +1,120 @@
+%% 小雷没摸鱼 Agent — 数据结构与服务类关系图
+
+classDiagram
+    class Database {
+        +static getInstance() Database
+        +exec(sql) void
+        +prepare(sql) Statement
+    }
+
+    class ResourceRepository {
+        -db: Database
+        +findAll(query: ResourceQuery) Resource[]
+        +findById(id: string) Resource|null
+        +findByIds(ids: string[]) Resource[]
+        +create(data: NewResource) Resource
+        +update(id: string, data: UpdateResource) Resource
+        +delete(id: string) void
+        +incrementDownload(id: string) void
+        +incrementView(id: string) void
+    }
+
+    class CategoryRepository {
+        -db: Database
+        +findAll() Category[]
+        +findById(id: string) Category|null
+        +create(name: string, desc: string) Category
+        +update(id: string, data: object) Category
+        +delete(id: string) void
+    }
+
+    class TagRepository {
+        -db: Database
+        +findAll() Tag[]
+        +create(name: string) Tag
+        +delete(id: string) void
+        +syncForResource(resourceId: string, tagIds: string[]) void
+    }
+
+    class SearchService {
+        -index: Map~string, Map~string, number~~
+        -idf: Map~string, number~
+        -docNorms: Map~string, number~
+        -dirty: boolean
+        +search(query: string, limit: number) SearchResult[]
+        +invalidate() void
+        -buildIndex() void
+        -tokenize(text: string) string[]
+        -tfidf(docId, term) number
+        -cosineSim(queryVec, docId) number
+    }
+
+    class AuthService {
+        +login(username: string, password: string) string|null
+        +verifyToken(token: string) AuthSession|null
+        +getSession(request: Request) AuthSession|null
+        -signJwt(session: AuthSession) string
+    }
+
+    class FileService {
+        +saveFile(file: File, type: ResourceType) FileMeta
+        +deleteFile(filePath: string) void
+        +getAbsolutePath(relPath: string) string
+        +detectType(mimetype: string, filename: string) ResourceType
+    }
+
+    class ResourceService {
+        -resourceRepo: ResourceRepository
+        -fileService: FileService
+        -searchService: SearchService
+        +uploadResource(formData: FormData) Resource
+        +addLink(data: LinkInput) Resource
+        +updateResource(id: string, data: object) Resource
+        +deleteResource(id: string) void
+        +searchResources(message: string) Resource[]
+    }
+
+    class Resource {
+        +id: string
+        +title: string
+        +description: string
+        +type: ResourceType
+        +filePath: string|null
+        +fileUrl: string
+        +fileSize: number|null
+        +fileFormat: string|null
+        +thumbnailPath: string|null
+        +categoryId: string|null
+        +category: Category|null
+        +tags: Tag[]
+        +viewCount: number
+        +downloadCount: number
+        +createdAt: string
+        +updatedAt: string
+    }
+
+    class Category {
+        +id: string
+        +name: string
+        +description: string|null
+        +resourceCount: number
+        +createdAt: string
+    }
+
+    class Tag {
+        +id: string
+        +name: string
+        +resourceCount: number
+        +createdAt: string
+    }
+
+    Database "1" --> "3" Repository : 持有连接
+    ResourceRepository --> Database : 使用
+    CategoryRepository --> Database : 使用
+    TagRepository --> Database : 使用
+    ResourceService --> ResourceRepository : 编排
+    ResourceService --> FileService : 文件落盘
+    ResourceService --> SearchService : 写后失效索引
+    SearchService --> ResourceRepository : 读全量建索引
+    Resource "1" --> "0..1" Category : 归属
+    Resource "1" --> "*" Tag : 多对多(resource_tags)

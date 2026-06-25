@@ -1,0 +1,113 @@
+%% 小雷没摸鱼 Agent — 关键流程时序图
+%% 包含：前台对话检索 / 后台上传 / 后台登录 / 后台删除
+
+%% ============ 4.1 前台对话检索流程 ============
+sequenceDiagram
+    autonumber
+    actor U as 访客
+    participant Page as 前台对话页
+    participant ChatAPI as /api/chat
+    participant Search as SearchService
+    participant Repo as ResourceRepository
+    participant DB as SQLite
+
+    U->>Page: 输入"给我一张科技感的背景图"
+    Page->>ChatAPI: POST /api/chat { message }
+    ChatAPI->>Search: search("给我一张科技感的背景图", 10)
+    Search->>Search: tokenize(text) → 字符bigram+关键词
+    Search->>Repo: findAll() 取全量资源文档
+    Repo->>DB: SELECT 资源+tags+category
+    DB-->>Repo: rows
+    Repo-->>Search: Resource[]
+    Search->>Search: 构建TF-IDF索引(若dirty) + 计算余弦相似度 + 标签精确匹配加权
+    Search-->>ChatAPI: SearchResult[] (按score排序)
+    ChatAPI->>Repo: findByIds(topIds) 取完整资源
+    Repo-->>ChatAPI: Resource[]
+    ChatAPI-->>Page: { reply, resources }
+    Page->>Page: 渲染AI气泡 + 资源卡片网格
+    U->>Page: 点击[预览] / [下载]
+    Page->>ChatAPI: GET /api/resources/:id/download
+    ChatAPI-->>U: 文件流
+
+
+%% ============ 4.2 后台上传资源流程 ============
+sequenceDiagram
+    autonumber
+    actor A as 管理员
+    participant Page as 后台资源页
+    participant API as /api/admin/resources
+    participant Auth as AuthService
+    participant Svc as ResourceService
+    participant File as FileService
+    participant Repo as ResourceRepository
+    participant Search as SearchService
+    participant DB as SQLite
+
+    A->>Page: 选择文件 + 填写名称/分类/标签
+    Page->>API: POST /api/admin/resources (multipart)
+    API->>Auth: verifyToken(cookie)
+    Auth-->>API: AuthSession（鉴权通过）
+    API->>Svc: uploadResource(formData)
+    Svc->>File: saveFile(file, type)
+    File->>File: 生成唯一文件名 → public/uploads/{type}/
+    File-->>Svc: { filePath, fileSize, fileFormat, thumbnailPath }
+    Svc->>Repo: create({ title, type, filePath, ... , categoryId, tagIds })
+    Repo->>DB: INSERT resources + resource_tags
+    DB-->>Repo: ok
+    Repo-->>Svc: Resource
+    Svc->>Search: invalidate()（标记索引脏）
+    Svc-->>API: Resource
+    API-->>Page: ApiResponse<Resource>
+    Page->>Page: 刷新资源列表
+
+
+%% ============ 4.3 后台登录流程 ============
+sequenceDiagram
+    autonumber
+    actor A as 管理员
+    participant Page as 登录页
+    participant API as /api/auth/login
+    participant Auth as AuthService
+    participant Cfg as config(env)
+
+    A->>Page: 输入账号/密码 → 点登录
+    Page->>API: POST /api/auth/login { username, password }
+    API->>Auth: login(username, password)
+    Auth->>Cfg: 读取 ADMIN_USERNAME / ADMIN_PASSWORD
+    Auth->>Auth: 比对（恒定时间比较）
+    alt 凭证正确
+        Auth-->>API: JWT token
+        API->>API: Set-Cookie httpOnly + SameSite
+        API-->>Page: ApiResponse<AuthSession>
+        Page->>Page: router.replace('/admin')
+    else 凭证错误
+        Auth-->>API: null
+        API-->>Page: ApiResponse(code=401, message="账号或密码错误")
+        Page->>Page: 显示错误提示
+    end
+
+
+%% ============ 4.4 后台删除资源流程 ============
+sequenceDiagram
+    autonumber
+    actor A as 管理员
+    participant Page as 后台资源页
+    participant API as /api/admin/resources/:id
+    participant Svc as ResourceService
+    participant Repo as ResourceRepository
+    participant File as FileService
+    participant Search as SearchService
+
+    A->>Page: 点击删除（确认弹窗）
+    Page->>API: DELETE /api/admin/resources/:id
+    API->>Svc: deleteResource(id)
+    Svc->>Repo: findById(id)
+    Repo-->>Svc: Resource
+    Svc->>File: deleteFile(resource.filePath)
+    File-->>Svc: ok（文件移除）
+    Svc->>Repo: delete(id)
+    Repo->>Repo: DELETE resources + 级联 resource_tags
+    Svc->>Search: invalidate()
+    Svc-->>API: ok
+    API-->>Page: ApiResponse<null>
+    Page->>Page: 移除卡片 + 刷新列表
