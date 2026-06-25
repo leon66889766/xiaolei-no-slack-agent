@@ -1,69 +1,40 @@
-# ============================================
-# 小雷没摸鱼 Agent — Dockerfile
-# 多阶段构建：deps → builder → runner
-# ============================================
-
-# ---- Stage 1: deps ----
-FROM node:18-alpine AS deps
-
-# better-sqlite3 需要 python/make/g++ 编译
-RUN apk add --no-cache python3 make g++
-
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-# ---- Stage 2: builder ----
+# Stage 1: Build the application
 FROM node:18-alpine AS builder
 
+# Install necessary build tools for native modules like better-sqlite3
+# python3, make, and g++ are required for node-gyp
 RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-COPY --from=deps /app/node_modules ./node_modules
+# Copy package files and install dependencies
+COPY package.json package-lock.json* ./
+# Use npm ci for reproducible builds
+RUN npm ci
+
+# Copy the rest of the application source code
 COPY . .
 
-# 构建时环境变量
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
-
+# Build the Next.js application
 RUN npm run build
 
-# ---- Stage 3: runner ----
+# Stage 2: Production environment
 FROM node:18-alpine AS runner
 
 WORKDIR /app
 
+# Set the environment to production
 ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
 
-# 创建非 root 用户
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
+# Copy the standalone output
+COPY --from=builder /app/.next/standalone ./
 
-# 复制 standalone 产物
+# Copy the public and .next/static folders
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/.next/static ./.next/static
 
-# 复制 setup 脚本所需文件
-COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
-
-# 创建持久化目录
-RUN mkdir -p /app/data /app/public/uploads/image /app/public/uploads/video /app/public/uploads/document && \
-    chown -R nextjs:nodejs /app/data /app/public/uploads
-
-# 持久卷
-VOLUME ["/app/data", "/app/public/uploads"]
-
-USER nextjs
-
+# Expose the port the app runs on
 EXPOSE 3000
 
-# 启动前先执行 setup 初始化数据库
-CMD ["sh", "-c", "npx tsx scripts/setup.ts && node server.js"]
+# Start the application
+CMD ["node", "server.js"]
